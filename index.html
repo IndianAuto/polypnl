@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Polygon Wallet P&L Tracker</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background: #0d1117;
+      color: #e6edf3;
+      min-height: 100vh;
+      padding: 20px;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 30px;
+    }
+    h1 { color: #8b5cf6; }
+    .refresh-info { color: #7d8590; font-size: 14px; }
+    .add-wallet {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 30px;
+    }
+    input {
+      flex: 1;
+      padding: 12px 16px;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      background: #161b22;
+      color: #e6edf3;
+      font-size: 14px;
+    }
+    input::placeholder { color: #7d8590; }
+    button {
+      padding: 12px 24px;
+      border: none;
+      border-radius: 8px;
+      background: #8b5cf6;
+      color: white;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    button:hover { background: #7c3aed; }
+    .btn-danger { background: #f85149; }
+    .btn-danger:hover { background: #da3633; }
+    .btn-small { padding: 6px 12px; font-size: 12px; }
+
+    .total-pnl {
+      background: linear-gradient(135deg, #161b22 0%, #1c2128 100%);
+      border: 1px solid #30363d;
+      border-radius: 16px;
+      padding: 30px;
+      margin-bottom: 30px;
+      text-align: center;
+    }
+    .total-pnl h2 { color: #7d8590; font-size: 16px; margin-bottom: 10px; }
+    .total-pnl .usdc-e-total {
+      font-size: 64px;
+      font-weight: 700;
+      margin-bottom: 10px;
+    }
+    .total-pnl .pnl-value {
+      font-size: 28px;
+      font-weight: 600;
+    }
+    .positive { color: #3fb950; }
+    .negative { color: #f85149; }
+
+    .wallets-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+      gap: 20px;
+    }
+    .wallet-card {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 12px;
+      padding: 20px;
+    }
+    .wallet-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+    .wallet-name {
+      font-weight: 600;
+      font-size: 18px;
+    }
+    .wallet-address {
+      color: #7d8590;
+      font-size: 12px;
+      font-family: monospace;
+    }
+    .balance-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 10px 0;
+      border-bottom: 1px solid #21262d;
+    }
+    .balance-row:last-child { border-bottom: none; }
+    .balance-label { color: #7d8590; }
+    .balance-value { font-weight: 600; }
+    .usdc-e-row {
+      background: linear-gradient(90deg, rgba(139,92,246,0.1) 0%, transparent 100%);
+      margin: 10px -20px;
+      padding: 15px 20px;
+    }
+    .usdc-e-row .balance-value {
+      font-size: 28px;
+      color: #8b5cf6;
+    }
+    .pnl-row {
+      margin-top: 15px;
+      padding-top: 15px;
+      border-top: 1px solid #30363d;
+    }
+    .start-balance { color: #7d8590; font-size: 12px; }
+
+    .loading {
+      text-align: center;
+      padding: 40px;
+      color: #7d8590;
+    }
+    .spinner {
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      border: 2px solid #30363d;
+      border-top-color: #8b5cf6;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin-right: 10px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>Polygon P&L Tracker</h1>
+    <div class="refresh-info">
+      Auto-refresh: 15 min | Last: <span id="lastRefresh">-</span>
+    </div>
+  </div>
+
+  <div class="add-wallet">
+    <input type="text" id="walletName" placeholder="Wallet name (e.g., Main, Trading)">
+    <input type="text" id="walletAddress" placeholder="0x... wallet address">
+    <button onclick="addWallet()">Add Wallet</button>
+  </div>
+
+  <div class="total-pnl">
+    <h2>TOTAL USDC.E BALANCE</h2>
+    <div class="usdc-e-total" id="totalUsdcE">$0.00</div>
+    <div class="pnl-value" id="totalPnl">P&L: $0.00</div>
+    <div class="start-balance">Starting: $<span id="totalStarting">0.00</span></div>
+  </div>
+
+  <div class="wallets-grid" id="walletsGrid">
+    <!-- Wallet cards injected here -->
+  </div>
+
+  <script>
+    const RPC_URL = 'https://polygon-rpc.com';
+    const TOKENS = {
+      'USDC.E': { address: '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174', decimals: 6 },
+      'USDC': { address: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359', decimals: 6 }
+    };
+    // balanceOf(address) selector
+    const BALANCE_OF_SIG = '0x70a08231';
+
+    let wallets = JSON.parse(localStorage.getItem('polygon_wallets') || '[]');
+    let startingBalances = JSON.parse(localStorage.getItem('polygon_starting') || '{}');
+
+    async function rpcCall(method, params) {
+      const res = await fetch(RPC_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params })
+      });
+      const data = await res.json();
+      return data.result;
+    }
+
+    async function getERC20Balance(tokenAddress, walletAddress) {
+      const paddedAddr = walletAddress.toLowerCase().replace('0x', '').padStart(64, '0');
+      const data = BALANCE_OF_SIG + paddedAddr;
+      const result = await rpcCall('eth_call', [{ to: tokenAddress, data }, 'latest']);
+      return hexToNumber(result, 6);
+    }
+
+    async function getNativeBalance(walletAddress) {
+      const result = await rpcCall('eth_getBalance', [walletAddress, 'latest']);
+      return hexToNumber(result, 18);
+    }
+
+    function hexToNumber(hex, decimals) {
+      if (!hex || hex === '0x') return 0;
+      const bigInt = BigInt(hex);
+      const divisor = BigInt(10 ** decimals);
+      const whole = bigInt / divisor;
+      const frac = bigInt % divisor;
+      return Number(whole) + Number(frac) / (10 ** decimals);
+    }
+
+    function isValidAddress(addr) {
+      return /^0x[a-fA-F0-9]{40}$/.test(addr);
+    }
+
+    async function init() {
+      renderWallets();
+      await refreshAllBalances();
+      setInterval(refreshAllBalances, 15 * 60 * 1000); // 15 min
+    }
+
+    function saveWallets() {
+      localStorage.setItem('polygon_wallets', JSON.stringify(wallets));
+    }
+
+    function saveStarting() {
+      localStorage.setItem('polygon_starting', JSON.stringify(startingBalances));
+    }
+
+    function addWallet() {
+      const name = document.getElementById('walletName').value.trim();
+      const address = document.getElementById('walletAddress').value.trim();
+
+      if (!name || !address) {
+        alert('Enter both name and address');
+        return;
+      }
+      if (!isValidAddress(address)) {
+        alert('Invalid address');
+        return;
+      }
+      if (wallets.find(w => w.address.toLowerCase() === address.toLowerCase())) {
+        alert('Wallet already added');
+        return;
+      }
+
+      wallets.push({ name, address, balances: {} });
+      saveWallets();
+      document.getElementById('walletName').value = '';
+      document.getElementById('walletAddress').value = '';
+      renderWallets();
+      refreshAllBalances();
+    }
+
+    function removeWallet(address) {
+      if (!confirm('Remove this wallet?')) return;
+      wallets = wallets.filter(w => w.address.toLowerCase() !== address.toLowerCase());
+      delete startingBalances[address.toLowerCase()];
+      saveWallets();
+      saveStarting();
+      renderWallets();
+      updateTotals();
+    }
+
+    function resetStarting(address) {
+      if (!confirm('Reset starting balance to current?')) return;
+      const wallet = wallets.find(w => w.address.toLowerCase() === address.toLowerCase());
+      if (wallet && wallet.balances['USDC.E']) {
+        startingBalances[address.toLowerCase()] = wallet.balances['USDC.E'];
+        saveStarting();
+        renderWallets();
+        updateTotals();
+      }
+    }
+
+    function renderWallets() {
+      const grid = document.getElementById('walletsGrid');
+      if (wallets.length === 0) {
+        grid.innerHTML = '<div class="loading">Add a wallet to start tracking</div>';
+        return;
+      }
+
+      grid.innerHTML = wallets.map(w => `
+        <div class="wallet-card" id="wallet-${w.address}">
+          <div class="wallet-header">
+            <div>
+              <div class="wallet-name">${w.name}</div>
+              <div class="wallet-address">${w.address.slice(0,6)}...${w.address.slice(-4)}</div>
+            </div>
+            <div>
+              <button class="btn-small" onclick="resetStarting('${w.address}')">Reset P&L</button>
+              <button class="btn-small btn-danger" onclick="removeWallet('${w.address}')">X</button>
+            </div>
+          </div>
+          <div class="balance-row usdc-e-row">
+            <span class="balance-label">USDC.E</span>
+            <span class="balance-value" id="bal-usdce-${w.address}">${formatUsd(w.balances?.['USDC.E'] || 0)}</span>
+          </div>
+          <div class="balance-row">
+            <span class="balance-label">USDC</span>
+            <span class="balance-value" id="bal-usdc-${w.address}">${formatUsd(w.balances?.['USDC'] || 0)}</span>
+          </div>
+          <div class="balance-row">
+            <span class="balance-label">POL (MATIC)</span>
+            <span class="balance-value" id="bal-pol-${w.address}">${formatNum(w.balances?.['POL'] || 0)} POL</span>
+          </div>
+          <div class="pnl-row">
+            <div class="balance-row">
+              <span class="balance-label">USDC.E P&L</span>
+              <span class="balance-value ${getPnlClass(w.address)}" id="pnl-${w.address}">${formatPnl(w.address)}</span>
+            </div>
+            <div class="start-balance">Start: ${formatUsd(startingBalances[w.address.toLowerCase()] || w.balances?.['USDC.E'] || 0)}</div>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    async function refreshAllBalances() {
+      document.getElementById('lastRefresh').textContent = new Date().toLocaleTimeString();
+
+      for (const wallet of wallets) {
+        try {
+          // USDC.E
+          wallet.balances['USDC.E'] = await getERC20Balance(TOKENS['USDC.E'].address, wallet.address);
+
+          // USDC
+          wallet.balances['USDC'] = await getERC20Balance(TOKENS['USDC'].address, wallet.address);
+
+          // POL (native)
+          wallet.balances['POL'] = await getNativeBalance(wallet.address);
+
+          // Set starting balance if not set
+          const addrLower = wallet.address.toLowerCase();
+          if (!startingBalances[addrLower]) {
+            startingBalances[addrLower] = wallet.balances['USDC.E'];
+            saveStarting();
+          }
+        } catch (err) {
+          console.error('Error fetching', wallet.address, err);
+        }
+      }
+
+      saveWallets();
+      renderWallets();
+      updateTotals();
+    }
+
+    function updateTotals() {
+      let totalUsdcE = 0;
+      let totalStarting = 0;
+
+      wallets.forEach(w => {
+        totalUsdcE += w.balances?.['USDC.E'] || 0;
+        totalStarting += startingBalances[w.address.toLowerCase()] || w.balances?.['USDC.E'] || 0;
+      });
+
+      const pnl = totalUsdcE - totalStarting;
+
+      document.getElementById('totalUsdcE').textContent = formatUsd(totalUsdcE);
+      document.getElementById('totalStarting').textContent = formatNum(totalStarting);
+
+      const pnlEl = document.getElementById('totalPnl');
+      pnlEl.textContent = `P&L: ${pnl >= 0 ? '+' : ''}${formatUsd(pnl)}`;
+      pnlEl.className = `pnl-value ${pnl >= 0 ? 'positive' : 'negative'}`;
+    }
+
+    function getPnlClass(address) {
+      const wallet = wallets.find(w => w.address === address);
+      if (!wallet) return '';
+      const current = wallet.balances?.['USDC.E'] || 0;
+      const start = startingBalances[address.toLowerCase()] || current;
+      return current >= start ? 'positive' : 'negative';
+    }
+
+    function formatPnl(address) {
+      const wallet = wallets.find(w => w.address === address);
+      if (!wallet) return '$0.00';
+      const current = wallet.balances?.['USDC.E'] || 0;
+      const start = startingBalances[address.toLowerCase()] || current;
+      const pnl = current - start;
+      return `${pnl >= 0 ? '+' : ''}${formatUsd(pnl)}`;
+    }
+
+    function formatUsd(val) {
+      return '$' + val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+
+    function formatNum(val) {
+      return val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+    }
+
+    init();
+  </script>
+</body>
+</html>
